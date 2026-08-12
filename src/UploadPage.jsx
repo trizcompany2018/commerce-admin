@@ -6,6 +6,7 @@ import {
   ingestCoupangOrder,
   ingestCoupangSettlement,
   ingest11st,
+  ingestGmarket,
 } from "./ingest";
 
 // 업로드 가능한 엑셀 종류 (플랫폼/파일별)
@@ -24,6 +25,7 @@ const SOURCES = [
     fn: ingestCoupangSettlement,
   },
   { id: "11st", label: "11번가 · 판매완료(정산)", fn: ingest11st },
+  { id: "gmarket", label: "G마켓 · 구매결정(정산예정)", fn: ingestGmarket },
 ];
 
 export default function UploadPage() {

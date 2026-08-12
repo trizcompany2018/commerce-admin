@@ -244,6 +244,41 @@ export async function ingest11st(file) {
 }
 
 // ============================================================
+// G마켓 · 구매결정(정산예정) 엑셀 (.xlsx, 헤더 첫 줄)
+//   옵션이 상품명에 포함됨(예: '두부아몬드스낵 50g x 20개') → 상품번호가 매핑키.
+//   금액: 판매금액=매출, 정산예정금액=정산, 서비스이용료=수수료
+// ============================================================
+export async function ingestGmarket(file) {
+  const rows = await readExcel(file);
+  const items = rows
+    .filter((r) => r['주문번호'] && r['상품번호'])
+    .map((r) => {
+      const gross = num(r['판매금액']);
+      const settle = num(r['정산예정금액']);
+      return {
+        platform: 'gmarket',
+        product_order_id: `${r['주문번호']}-${r['상품번호']}`,   // 라인 PK
+        order_id: String(r['주문번호']),
+        tracking_no: r['송장번호'] ? String(r['송장번호']) : null,
+        platform_product_id: String(r['상품번호']),               // 매핑 키
+        listing_name: r['상품명'] ?? null,
+        option_info: r['판매자관리코드'] ?? null,                  // 옵션 텍스트(참고)
+        quantity: num(r['수량']),
+        price: gross,                                             // 판매금액=매출
+        option_price: 0,
+        payment_date: ymd(r['결제일'] ?? r['주문일'] ?? r['구매결정일']),
+        fee_amount: Math.max(0, num(r['서비스이용료'])),
+        settlement_amount: settle,                               // 정산예정금액
+        line_type: 'item',
+      };
+    });
+  await upsertItems(items);
+  await registerListings(items);
+  await supabase.rpc('generate_shipments');
+  return { inserted: items.length };
+}
+
+// ============================================================
 // 공통 헬퍼
 // ============================================================
 async function upsertItems(items) {

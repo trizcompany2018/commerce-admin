@@ -72,24 +72,6 @@ const TUBE = {
   brightgreen: "#00bd19",
   brown: "#b26332",
 };
-// 막대마다 돌려쓸 14색 순환 팔레트 (인접 대비 좋게 배열)
-const TUBE_LIST = [
-  "#0019a8",
-  "#da291c",
-  "#007a33",
-  "#ef7b10",
-  "#9a0058",
-  "#0098d8",
-  "#ffce00",
-  "#9364cc",
-  "#00afad",
-  "#b26332",
-  "#00bd19",
-  "#f4a9be",
-  "#93ceba",
-  "#a1a5a7",
-];
-const tubeAt = (i) => TUBE_LIST[i % TUBE_LIST.length];
 const groupOf = (p) => GROUP[p] || p || "기타";
 
 const PLATFORMS = [
@@ -510,6 +492,17 @@ export default function DashboardPage() {
     );
   });
 
+  // 월별 누적 매출 (위 일별 데이터를 러닝 합계로 — 같은 월 선택에 자동 연동)
+  const cumMonth = (() => {
+    let ba = 0,
+      ca = 0;
+    return monthData.map((d) => {
+      ba += Number(d.base || 0);
+      ca += Number(d.comp || 0);
+      return { day: d.day, base: ba, comp: ca };
+    });
+  })();
+
   return (
     <div style={S.wrap}>
       <h1 style={S.h1}>
@@ -522,7 +515,7 @@ export default function DashboardPage() {
             verticalAlign: "middle",
           }}
         >
-          v2.1 · DB집계 (결제건수 {lineCount.toLocaleString("ko-KR")})
+          v2 · DB집계 (결제건수 {lineCount.toLocaleString("ko-KR")})
         </span>
       </h1>
 
@@ -626,19 +619,13 @@ export default function DashboardPage() {
         <table style={S.table}>
           <thead>
             <tr>
-              {[
-                "플랫폼",
-                "매출",
-                "정산금액",
-                "배송비",
-                "원가",
-                "순이익",
-                "주문수",
-              ].map((h) => (
-                <th key={h} style={S.th}>
+              <th style={S.th}>플랫폼</th>
+              {["매출", "정산금액", "배송비", "원가", "순이익"].map((h) => (
+                <th key={h} style={S.thr}>
                   {h}
                 </th>
               ))}
+              <th style={S.thc}>주문수</th>
             </tr>
           </thead>
           <tbody>
@@ -817,7 +804,51 @@ export default function DashboardPage() {
               type="monotone"
               dataKey="base"
               name={`기준월 ${baseMonth}`}
-              stroke="#0019a8"
+              stroke="#00afad"
+              strokeWidth={2}
+              dot={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="comp"
+              name={`비교월 ${compMonth}`}
+              stroke="#da291c"
+              strokeWidth={2}
+              dot={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* 월별 누적 매출 비교 (위 차트와 같은 월 선택에 연동) */}
+      <div style={S.card}>
+        <div style={S.ctitle}>월별 누적 매출 비교 (일자별 누적)</div>
+        <div style={{ fontSize: 12, color: "#697386", margin: "4px 0 10px" }}>
+          위 차트와 같은 기준월·비교월. 날이 갈수록 매출이 얼마나 쌓이는지(러닝
+          합계)를 보여줘요.
+        </div>
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart
+            data={cumMonth}
+            margin={{ top: 8, right: 16, left: 4, bottom: 4 }}
+          >
+            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+            <XAxis
+              dataKey="day"
+              fontSize={11}
+              tickFormatter={(d) => d + "일"}
+            />
+            <YAxis fontSize={11} width={54} tickFormatter={man} />
+            <Tooltip
+              formatter={(v) => won(v)}
+              labelFormatter={(d) => d + "일까지 누적"}
+            />
+            <Legend />
+            <Line
+              type="monotone"
+              dataKey="base"
+              name={`기준월 ${baseMonth}`}
+              stroke="#00afad"
               strokeWidth={2}
               dot={false}
             />
@@ -875,11 +906,7 @@ export default function DashboardPage() {
                   : v.toLocaleString("ko-KR") + "개"
               }
             />
-            <Bar dataKey={prodMetric} radius={[0, 4, 4, 0]}>
-              {topProducts.map((e, i) => (
-                <Cell key={i} fill={tubeAt(i)} />
-              ))}
-            </Bar>
+            <Bar dataKey={prodMetric} fill="#0019a8" radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -907,11 +934,12 @@ export default function DashboardPage() {
               interval={0}
             />
             <Tooltip formatter={(v) => v.toLocaleString("ko-KR") + "개"} />
-            <Bar dataKey="수량" radius={[0, 4, 4, 0]} maxBarSize={22}>
-              {byPack.map((e, i) => (
-                <Cell key={i} fill={tubeAt(i)} />
-              ))}
-            </Bar>
+            <Bar
+              dataKey="수량"
+              fill="#b26332"
+              radius={[0, 4, 4, 0]}
+              maxBarSize={22}
+            />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -1007,11 +1035,12 @@ export default function DashboardPage() {
                     (cfgMetric === "건수" ? "건" : "개")
               }
             />
-            <Bar dataKey={cfgMetric} radius={[0, 4, 4, 0]} maxBarSize={22}>
-              {setTop.map((e, i) => (
-                <Cell key={i} fill={tubeAt(i)} />
-              ))}
-            </Bar>
+            <Bar
+              dataKey={cfgMetric}
+              fill="#9a0058"
+              radius={[0, 4, 4, 0]}
+              maxBarSize={22}
+            />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -1039,11 +1068,12 @@ export default function DashboardPage() {
               interval={0}
             />
             <Tooltip formatter={(v) => v.toLocaleString("ko-KR") + "개"} />
-            <Bar dataKey="낱개수량" radius={[0, 4, 4, 0]} maxBarSize={22}>
-              {demandTop.map((e, i) => (
-                <Cell key={i} fill={tubeAt(i)} />
-              ))}
-            </Bar>
+            <Bar
+              dataKey="낱개수량"
+              fill="#007a33"
+              radius={[0, 4, 4, 0]}
+              maxBarSize={22}
+            />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -1082,11 +1112,12 @@ export default function DashboardPage() {
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={11} width={54} tickFormatter={man} />
               <Tooltip formatter={(v) => won(v)} />
-              <Bar dataKey="매출" radius={[4, 4, 0, 0]} maxBarSize={46}>
-                {byWeekday.map((e, i) => (
-                  <Cell key={i} fill={tubeAt(i)} />
-                ))}
-              </Bar>
+              <Bar
+                dataKey="매출"
+                fill="#9364cc"
+                radius={[4, 4, 0, 0]}
+                maxBarSize={46}
+              />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -1101,23 +1132,17 @@ export default function DashboardPage() {
           <table style={S.table}>
             <thead>
               <tr>
-                {[
-                  "넘버",
-                  "플랫폼",
-                  "주문번호",
-                  "송장번호",
-                  "제품",
-                  "주문금액",
-                  "정산예정금액",
-                  "수량",
-                  "공가",
-                  "배송비",
-                  "이익",
-                ].map((h) => (
-                  <th key={h} style={S.th}>
-                    {h}
-                  </th>
-                ))}
+                <th style={S.thc}>넘버</th>
+                <th style={S.th}>플랫폼</th>
+                <th style={S.th}>주문번호</th>
+                <th style={S.th}>송장번호</th>
+                <th style={S.th}>제품</th>
+                <th style={S.thr}>주문금액</th>
+                <th style={S.thr}>정산예정금액</th>
+                <th style={S.thc}>수량</th>
+                <th style={S.thr}>공가</th>
+                <th style={S.thr}>배송비</th>
+                <th style={S.thr}>이익</th>
               </tr>
             </thead>
             <tbody>
@@ -1372,6 +1397,22 @@ const S = {
     fontWeight: 700,
     padding: "7px 9px",
     textAlign: "left",
+    borderBottom: "1px solid #e3e8ef",
+  },
+  thr: {
+    background: "#f2f5f9",
+    color: "#48566a",
+    fontWeight: 700,
+    padding: "7px 9px",
+    textAlign: "right",
+    borderBottom: "1px solid #e3e8ef",
+  },
+  thc: {
+    background: "#f2f5f9",
+    color: "#48566a",
+    fontWeight: 700,
+    padding: "7px 9px",
+    textAlign: "center",
     borderBottom: "1px solid #e3e8ef",
   },
   td: { padding: "6px 9px", borderBottom: "1px solid #eef1f5" },

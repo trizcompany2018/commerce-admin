@@ -48,12 +48,48 @@ const GROUP = {
   "11st": "11번가",
 };
 const GROUP_ORDER = ["네이버", "쿠팡", "G마켓·옥션", "11번가"];
+// 플랫폼별 브랜드 색 (구분 명확)
 const GCOLOR = {
-  네이버: "#03C75A",
-  쿠팡: "#E3002B",
-  "G마켓·옥션": "#E8A200",
-  "11번가": "#7B4FE0",
+  네이버: "#03c75a",
+  쿠팡: "#d73227",
+  "G마켓·옥션": "#0588ee",
+  "11번가": "#ff5a2e",
 };
+// 런던 지하철(튜브 라인) 팔레트 — 차트 배색용
+const TUBE = {
+  navy: "#0019a8",
+  red: "#da291c",
+  yellow: "#ffce00",
+  green: "#007a33",
+  pink: "#f4a9be",
+  grey: "#a1a5a7",
+  magenta: "#9a0058",
+  blue: "#0098d8",
+  turq: "#93ceba",
+  purple: "#9364cc",
+  orange: "#ef7b10",
+  teal: "#00afad",
+  brightgreen: "#00bd19",
+  brown: "#b26332",
+};
+// 막대마다 돌려쓸 14색 순환 팔레트 (인접 대비 좋게 배열)
+const TUBE_LIST = [
+  "#0019a8",
+  "#da291c",
+  "#007a33",
+  "#ef7b10",
+  "#9a0058",
+  "#0098d8",
+  "#ffce00",
+  "#9364cc",
+  "#00afad",
+  "#b26332",
+  "#00bd19",
+  "#f4a9be",
+  "#93ceba",
+  "#a1a5a7",
+];
+const tubeAt = (i) => TUBE_LIST[i % TUBE_LIST.length];
 const groupOf = (p) => GROUP[p] || p || "기타";
 
 const PLATFORMS = [
@@ -419,9 +455,9 @@ export default function DashboardPage() {
   // 구성유형별 판매 (단품 / 동일맛 멀티팩 / 혼합세트)
   const CFG_ORDER = ["혼합세트", "동일맛 멀티팩", "단품"];
   const CFG_COLOR = {
-    혼합세트: "#7B4FE0",
-    "동일맛 멀티팩": "#e08a00",
-    단품: "#12C4A6",
+    혼합세트: TUBE.magenta,
+    "동일맛 멀티팩": TUBE.orange,
+    단품: TUBE.teal,
   };
   const cfgAgg = saleCfg.reduce((m, r) => {
     const k = r.config_type || "기타";
@@ -453,14 +489,14 @@ export default function DashboardPage() {
 
   // 비용 구조 (총매출 = 수수료 + 배송비 + 원가 + 순이익)
   const costParts = [
-    { name: "순이익", value: Math.max(0, kpi.net), color: "#12C4A6" },
-    { name: "제품원가", value: Math.max(0, kpi.cost), color: "#5D6E72" },
+    { name: "순이익", value: Math.max(0, kpi.net), color: TUBE.green },
+    { name: "제품원가", value: Math.max(0, kpi.cost), color: TUBE.grey },
     {
       name: "수수료",
       value: Math.max(0, kpi.sales - kpi.settlement),
-      color: "#9AA9A6",
+      color: TUBE.purple,
     },
-    { name: "배송비", value: Math.max(0, kpi.courier), color: "#E0922B" },
+    { name: "배송비", value: Math.max(0, kpi.courier), color: TUBE.orange },
   ];
 
   // 요일별 매출 (일~토)
@@ -481,7 +517,7 @@ export default function DashboardPage() {
         <span
           style={{
             fontSize: 12,
-            color: "#7B4FE0",
+            color: "#9a0058",
             fontWeight: 700,
             verticalAlign: "middle",
           }}
@@ -575,12 +611,12 @@ export default function DashboardPage() {
           label="순이익"
           value={<Amt n={kpi.net} />}
           big
-          accent={kpi.net >= 0 ? "#2e7d5b" : "#c0392b"}
+          accent={kpi.net >= 0 ? "#007a33" : "#da291c"}
         />
         <Kpi
           label="이익률"
           value={margin.toFixed(1) + "%"}
-          accent={margin >= 0 ? "#2e7d5b" : "#c0392b"}
+          accent={margin >= 0 ? "#007a33" : "#da291c"}
         />
       </div>
 
@@ -625,7 +661,7 @@ export default function DashboardPage() {
                   style={{
                     ...S.tdr,
                     fontWeight: 700,
-                    color: r.순이익 >= 0 ? "#2e7d5b" : "#c0392b",
+                    color: r.순이익 >= 0 ? "#007a33" : "#da291c",
                   }}
                 >
                   <Amt n={r.순이익} />
@@ -691,7 +727,7 @@ export default function DashboardPage() {
               yAxisId="l"
               type="monotone"
               dataKey="매출"
-              stroke="#3b6fd6"
+              stroke="#0098d8"
               strokeWidth={2}
               dot={false}
             />
@@ -699,7 +735,7 @@ export default function DashboardPage() {
               yAxisId="r"
               type="monotone"
               dataKey="주문수"
-              stroke="#e08a00"
+              stroke="#ef7b10"
               strokeWidth={2}
               dot={false}
             />
@@ -781,7 +817,7 @@ export default function DashboardPage() {
               type="monotone"
               dataKey="base"
               name={`기준월 ${baseMonth}`}
-              stroke="#3b6fd6"
+              stroke="#0019a8"
               strokeWidth={2}
               dot={false}
             />
@@ -789,7 +825,7 @@ export default function DashboardPage() {
               type="monotone"
               dataKey="comp"
               name={`비교월 ${compMonth}`}
-              stroke="#e3002b"
+              stroke="#da291c"
               strokeWidth={2}
               dot={false}
             />
@@ -839,11 +875,11 @@ export default function DashboardPage() {
                   : v.toLocaleString("ko-KR") + "개"
               }
             />
-            <Bar
-              dataKey={prodMetric}
-              fill={prodMetric === "매출" ? "#3b6fd6" : "#12C4A6"}
-              radius={[0, 4, 4, 0]}
-            />
+            <Bar dataKey={prodMetric} radius={[0, 4, 4, 0]}>
+              {topProducts.map((e, i) => (
+                <Cell key={i} fill={tubeAt(i)} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -871,12 +907,11 @@ export default function DashboardPage() {
               interval={0}
             />
             <Tooltip formatter={(v) => v.toLocaleString("ko-KR") + "개"} />
-            <Bar
-              dataKey="수량"
-              fill="#e08a00"
-              radius={[0, 4, 4, 0]}
-              maxBarSize={22}
-            />
+            <Bar dataKey="수량" radius={[0, 4, 4, 0]} maxBarSize={22}>
+              {byPack.map((e, i) => (
+                <Cell key={i} fill={tubeAt(i)} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -935,7 +970,7 @@ export default function DashboardPage() {
             />
             <Bar dataKey={cfgMetric} radius={[4, 4, 0, 0]} maxBarSize={90}>
               {configRows.map((e, i) => (
-                <Cell key={i} fill={CFG_COLOR[e.type] || "#3b6fd6"} />
+                <Cell key={i} fill={CFG_COLOR[e.type] || "#0019a8"} />
               ))}
             </Bar>
           </BarChart>
@@ -972,12 +1007,11 @@ export default function DashboardPage() {
                     (cfgMetric === "건수" ? "건" : "개")
               }
             />
-            <Bar
-              dataKey={cfgMetric}
-              fill="#7B4FE0"
-              radius={[0, 4, 4, 0]}
-              maxBarSize={22}
-            />
+            <Bar dataKey={cfgMetric} radius={[0, 4, 4, 0]} maxBarSize={22}>
+              {setTop.map((e, i) => (
+                <Cell key={i} fill={tubeAt(i)} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -1005,12 +1039,11 @@ export default function DashboardPage() {
               interval={0}
             />
             <Tooltip formatter={(v) => v.toLocaleString("ko-KR") + "개"} />
-            <Bar
-              dataKey="낱개수량"
-              fill="#0B6E63"
-              radius={[0, 4, 4, 0]}
-              maxBarSize={22}
-            />
+            <Bar dataKey="낱개수량" radius={[0, 4, 4, 0]} maxBarSize={22}>
+              {demandTop.map((e, i) => (
+                <Cell key={i} fill={tubeAt(i)} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -1049,12 +1082,11 @@ export default function DashboardPage() {
               <XAxis dataKey="label" fontSize={12} />
               <YAxis fontSize={11} width={54} tickFormatter={man} />
               <Tooltip formatter={(v) => won(v)} />
-              <Bar
-                dataKey="매출"
-                fill="#3b6fd6"
-                radius={[4, 4, 0, 0]}
-                maxBarSize={46}
-              />
+              <Bar dataKey="매출" radius={[4, 4, 0, 0]} maxBarSize={46}>
+                {byWeekday.map((e, i) => (
+                  <Cell key={i} fill={tubeAt(i)} />
+                ))}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -1117,7 +1149,7 @@ export default function DashboardPage() {
                       style={{
                         ...S.tdr,
                         fontWeight: 700,
-                        color: profit >= 0 ? "#2e7d5b" : "#c0392b",
+                        color: profit >= 0 ? "#007a33" : "#da291c",
                       }}
                     >
                       {won(profit)}
@@ -1210,14 +1242,14 @@ const S = {
     padding: "7px 16px",
     borderRadius: 8,
     border: 0,
-    background: "#3b6fd6",
+    background: "#0019a8",
     color: "#fff",
     fontWeight: 700,
     cursor: "pointer",
   },
   err: {
     background: "#fdecec",
-    color: "#c0392b",
+    color: "#da291c",
     padding: "10px 14px",
     borderRadius: 8,
     marginBottom: 14,
@@ -1237,7 +1269,7 @@ const S = {
   snapTitle: {
     fontSize: 14,
     fontWeight: 700,
-    color: "#0B6E63",
+    color: "#0019a8",
     marginBottom: 8,
   },
   snapSub: { fontSize: 11.5, fontWeight: 400, color: "#7A8A8E" },
@@ -1262,7 +1294,7 @@ const S = {
     padding: "12px 12px",
     minWidth: 0,
   },
-  kpiBig: { border: "2px solid #3b6fd6", background: "#f5f8ff" },
+  kpiBig: { border: "2px solid #0019a8", background: "#f5f8ff" },
   klabel: {
     fontSize: 12,
     color: "#697386",
@@ -1303,8 +1335,8 @@ const S = {
   tabOn: {
     padding: "5px 13px",
     borderRadius: 7,
-    border: "1px solid #3b6fd6",
-    background: "#3b6fd6",
+    border: "1px solid #0019a8",
+    background: "#0019a8",
     color: "#fff",
     fontSize: 12.5,
     fontWeight: 700,

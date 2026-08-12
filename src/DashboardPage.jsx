@@ -522,7 +522,7 @@ export default function DashboardPage() {
             verticalAlign: "middle",
           }}
         >
-          v2 · DB집계 (결제건수 {lineCount.toLocaleString("ko-KR")})
+          v2.1 · DB집계 (결제건수 {lineCount.toLocaleString("ko-KR")})
         </span>
       </h1>
 

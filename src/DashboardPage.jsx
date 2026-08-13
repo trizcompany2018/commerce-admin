@@ -273,18 +273,24 @@ export default function DashboardPage() {
         return `${p[1]}/${p[2]}`;
       }; // → 08/15
       const todayS = iso(now);
-      const yd = new Date(now);
-      yd.setDate(yd.getDate() - 1);
-      const yS = iso(yd);
-      const monthS = iso(new Date(now.getFullYear(), now.getMonth(), 1));
-      const monthE = iso(new Date(now.getFullYear(), now.getMonth() + 1, 0));
-      const wk = new Date(now);
-      wk.setDate(wk.getDate() - now.getDay()); // 일요일 시작
-      const we = new Date(wk);
-      we.setDate(we.getDate() + 6);
-      const weekS = iso(wk),
-        weekE = iso(we);
-      // 스냅샷 3개도 DB 집계(RPC)로 — 각 기간당 한 줄만
+      // 롤링 윈도우 (모두 오늘 제외 = 어제까지). 주초/월초 튐 없음.
+      const addDays = (s, n) => {
+        const d = new Date(s);
+        d.setDate(d.getDate() + n);
+        return iso(d);
+      };
+      const yS = addDays(todayS, -1); // 하루 전(어제)
+      const w7S = addDays(todayS, -7),
+        w7E = yS; // 최근 7일 (어제까지)
+      const w30S = addDays(todayS, -30),
+        w30E = yS; // 최근 30일 (어제까지)
+      // 직전 동일 길이 구간
+      const y2S = addDays(todayS, -2); // 그 전날(하루)
+      const p7S = addDays(todayS, -14),
+        p7E = addDays(todayS, -8); // 직전 7일
+      const p30S = addDays(todayS, -60),
+        p30E = addDays(todayS, -31); // 직전 30일
+
       const call = async (s, e) => {
         const { data, error } = await supabase.rpc("dashboard_summary", {
           p_from: s,
@@ -299,15 +305,36 @@ export default function DashboardPage() {
           sales: Number(r.sales || 0),
         };
       };
-      const [d1, d2, d3] = await Promise.all([
+      const [d1, d2, d3, pp1, pp2, pp3] = await Promise.all([
         call(yS, yS),
-        call(weekS, todayS),
-        call(monthS, todayS),
+        call(w7S, w7E),
+        call(w30S, w30E),
+        call(y2S, y2S),
+        call(p7S, p7E),
+        call(p30S, p30E),
       ]);
       setSummary([
-        { label: "전일", range: slash(yS), ...d1 },
-        { label: "이번주", range: `${slash(weekS)} ~ ${md(weekE)}`, ...d2 },
-        { label: "이번달", range: `${slash(monthS)} ~ ${md(monthE)}`, ...d3 },
+        {
+          label: "하루 전",
+          range: slash(yS),
+          ...d1,
+          prevSales: pp1.sales,
+          prevLabel: "그 전날",
+        },
+        {
+          label: "최근 7일",
+          range: `${slash(w7S)} ~ ${md(w7E)}`,
+          ...d2,
+          prevSales: pp2.sales,
+          prevLabel: "직전 7일",
+        },
+        {
+          label: "최근 한 달",
+          range: `${slash(w30S)} ~ ${md(w30E)}`,
+          ...d3,
+          prevSales: pp3.sales,
+          prevLabel: "직전 30일",
+        },
       ]);
     } catch (e) {
       setErr(e?.message ?? String(e));
@@ -525,7 +552,14 @@ export default function DashboardPage() {
           {summary.map((s) => (
             <div key={s.label} style={S.snapCard}>
               <div style={S.snapTitle}>
-                {s.label} <span style={S.snapSub}>{s.range}</span>
+                <span>
+                  {s.label} <span style={S.snapSub}>{s.range}</span>
+                </span>
+                <Delta
+                  cur={s.sales}
+                  prev={s.prevSales}
+                  title={`${s.prevLabel} 대비`}
+                />
               </div>
               <div style={S.snapRow}>
                 <span style={S.snapLbl}>결제고객수</span>
@@ -1207,6 +1241,38 @@ export default function DashboardPage() {
   );
 }
 
+// 전기간 대비 % 배지 (초록↗ / 빨강↘ / 데이터없음 회색–). 튜브색 + 옅은 배경.
+function Delta({ cur, prev, title }) {
+  if (!prev || prev <= 0) {
+    return (
+      <span
+        title={title}
+        style={{
+          ...S.delta,
+          background: "rgba(161,165,167,0.18)",
+          color: "#8a9092",
+        }}
+      >
+        –
+      </span>
+    );
+  }
+  const pct = ((Number(cur || 0) - prev) / prev) * 100;
+  const up = pct >= 0;
+  return (
+    <span
+      title={`${title || ""} (${up ? "+" : ""}${pct.toFixed(1)}%)`}
+      style={{
+        ...S.delta,
+        background: up ? "rgba(0,122,51,0.13)" : "rgba(218,41,28,0.13)",
+        color: up ? "#007a33" : "#da291c",
+      }}
+    >
+      {Math.abs(pct).toFixed(0)}% {up ? "↗" : "↘"}
+    </span>
+  );
+}
+
 // 압축 금액 + 호버 시 정확한 금액(native title)
 function Amt({ n }) {
   return (
@@ -1296,6 +1362,10 @@ const S = {
     fontWeight: 700,
     color: "#0019a8",
     marginBottom: 8,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
   },
   snapSub: { fontSize: 11.5, fontWeight: 400, color: "#7A8A8E" },
   snapRow: {
@@ -1305,7 +1375,21 @@ const S = {
     padding: "3px 0",
   },
   snapLbl: { fontSize: 12.5, color: "#5B6B72" },
-  snapVal: { fontSize: 15, fontWeight: 700, color: "#1c2330" },
+  snapVal: {
+    fontSize: 15,
+    fontWeight: 700,
+    color: "#1c2330",
+    display: "inline-flex",
+    alignItems: "center",
+  },
+  delta: {
+    fontSize: 11,
+    fontWeight: 700,
+    padding: "1px 6px",
+    borderRadius: 6,
+    whiteSpace: "nowrap",
+    marginLeft: 6,
+  },
   kpis: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit,minmax(128px,1fr))",

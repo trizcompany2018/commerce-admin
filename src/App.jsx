@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link, Navigate } from "react-router-dom";
 import UploadPage from "./UploadPage";
 import DashboardPage from "./DashboardPage";
 import MappingPage from "./MappingPage";
+import ComponentSalesPage from "./ComponentSalesPage";
 
 export default function App() {
   return (
@@ -10,6 +11,9 @@ export default function App() {
       <nav style={navStyle}>
         <Link to="/dashboard" style={linkStyle}>
           대시보드
+        </Link>
+        <Link to="/products" style={linkStyle}>
+          제품별 판매
         </Link>
         <Link to="/upload" style={linkStyle}>
           업로드
@@ -21,6 +25,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/products" element={<ComponentSalesPage />} />
         <Route path="/upload" element={<UploadPage />} />
         <Route path="/mapping" element={<MappingPage />} />
       </Routes>

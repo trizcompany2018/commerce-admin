@@ -56,6 +56,7 @@ export default function ComponentSalesPage() {
       const { data, error } = await supabase.rpc("product_component_sales", {
         p_from: from,
         p_to: to,
+        p_brand: "것플렉스",
       });
       if (error) throw error;
       setRows(

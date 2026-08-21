@@ -99,7 +99,18 @@ async function fetchAll(makeQuery) {
   return out;
 }
 
-export default function DashboardPage() {
+// 섹션 그룹 플래그 (기본: 전부)
+//   financial   = 스냅샷·KPI·플랫폼실적·일별추이·일별플랫폼·월별비교·누적
+//   costWeekday = 비용구조·요일별
+//   products    = 상품순위·개입수·구성유형·혼합세트·낱개실수요
+//   detail      = 주문 상세내역
+const ALL = { financial: 1, costWeekday: 1, products: 1, detail: 1 };
+
+export default function DashboardPage({
+  brand = null,
+  show = ALL,
+  title = "대시보드",
+}) {
   const today = new Date().toISOString().slice(0, 10);
   const twoAgo = (() => {
     const d = new Date();
@@ -142,13 +153,14 @@ export default function DashboardPage() {
     setLoading(true);
     setErr(null);
     try {
-      // ① 상단 KPI = DB 집계(RPC) 한 줄. 행 전체를 안 받으므로 즉시 표시됨
+      // ① 상단 KPI = DB 집계(RPC) 한 줄 (브랜드 필터)
       const { data: aggData, error: aggErr } = await supabase.rpc(
         "dashboard_summary",
         {
           p_from: from,
           p_to: to,
           p_platform: platform === "all" ? null : platform,
+          p_brand: brand,
         },
       );
       if (aggErr) throw aggErr;
@@ -164,7 +176,7 @@ export default function DashboardPage() {
         net: Number(a.net || 0),
       });
 
-      // ② 차트·상세표용 행 데이터 (페이지네이션). 공통 쿼리빌더 팩토리
+      // ② 차트·상세표용 행 (섹션에 필요한 것만 fetch → 로딩 개선). 브랜드 필터 포함
       const q = (tbl, cols, extra) => () => {
         let b = supabase
           .from(tbl)
@@ -173,49 +185,59 @@ export default function DashboardPage() {
           .lte("payment_date", to);
         if (extra) b = extra(b);
         if (platform !== "all") b = b.eq("platform", platform);
+        if (brand) b = b.eq("brand", brand);
         return b;
       };
+      const needRows = show.financial || show.costWeekday || show.detail;
       setRows(
-        await fetchAll(
-          q(
-            "settlement_line",
-            "payment_date,platform,order_id,product_order_id,tracking_no,listing_name,product_display,quantity,gross_sales,settlement_amount,courier_cost,product_cost,net_profit",
-            (b) =>
-              b
-                .order("payment_date", { ascending: true })
-                .order("product_order_id", { ascending: true }),
-          ),
-        ),
+        needRows
+          ? await fetchAll(
+              q(
+                "settlement_line",
+                "payment_date,platform,order_id,product_order_id,tracking_no,listing_name,product_display,quantity,gross_sales,settlement_amount,courier_cost,product_cost,net_profit",
+                (b) =>
+                  b
+                    .order("payment_date", { ascending: true })
+                    .order("product_order_id", { ascending: true }),
+              ),
+            )
+          : [],
       );
       setProds(
-        await fetchAll(
-          q(
-            "sales_enriched",
-            "product_name,variant_name,pack_size,quantity,unit_qty,settlement_amount,platform,payment_date",
-            (b) =>
-              b
-                .not("product_id", "is", null)
-                .order("payment_date", { ascending: true }),
-          ),
-        ),
+        show.products
+          ? await fetchAll(
+              q(
+                "sales_enriched",
+                "product_name,variant_name,pack_size,quantity,unit_qty,settlement_amount,platform,payment_date",
+                (b) =>
+                  b
+                    .not("product_id", "is", null)
+                    .order("payment_date", { ascending: true }),
+              ),
+            )
+          : [],
       );
       setDemand(
-        await fetchAll(
-          q(
-            "component_demand_by_product",
-            "product_name,platform,payment_date,total_units",
-            (b) => b.order("payment_date", { ascending: true }),
-          ),
-        ),
+        show.products
+          ? await fetchAll(
+              q(
+                "component_demand_by_product",
+                "product_name,platform,payment_date,total_units",
+                (b) => b.order("payment_date", { ascending: true }),
+              ),
+            )
+          : [],
       );
       setSaleCfg(
-        await fetchAll(
-          q(
-            "sale_config",
-            "platform,payment_date,config_type,config_name,quantity,settlement_amount,total_pieces",
-            (b) => b.order("payment_date", { ascending: true }),
-          ),
-        ),
+        show.products
+          ? await fetchAll(
+              q(
+                "sale_config",
+                "platform,payment_date,config_type,config_name,quantity,settlement_amount,total_pieces",
+                (b) => b.order("payment_date", { ascending: true }),
+              ),
+            )
+          : [],
       );
     } catch (e) {
       setErr(e?.message ?? String(e));
@@ -229,14 +251,16 @@ export default function DashboardPage() {
     try {
       const fetchMonth = async (m) => {
         const [s, e] = monthBounds(m);
-        return fetchAll(() =>
-          supabase
+        return fetchAll(() => {
+          let b = supabase
             .from("settlement_line")
-            .select("payment_date,gross_sales")
+            .select("payment_date,gross_sales,brand")
             .gte("payment_date", s)
             .lt("payment_date", e)
-            .order("payment_date", { ascending: true }),
-        );
+            .order("payment_date", { ascending: true });
+          if (brand) b = b.eq("brand", brand);
+          return b;
+        });
       };
       const [b, c] = await Promise.all([
         fetchMonth(baseMonth),
@@ -296,6 +320,7 @@ export default function DashboardPage() {
           p_from: s,
           p_to: e,
           p_platform: null,
+          p_brand: brand,
         });
         if (error) throw error;
         const r = (data && data[0]) || {};
@@ -343,8 +368,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     load();
-    loadMonthly();
-    loadSummary(); /* eslint-disable-next-line */
+    if (show.financial) {
+      loadMonthly();
+      loadSummary();
+    }
+    /* eslint-disable-next-line */
   }, []);
 
   // KPI 는 DB 집계(agg) 사용 — 행수와 무관하게 정확·즉시
@@ -533,7 +561,7 @@ export default function DashboardPage() {
   return (
     <div style={S.wrap}>
       <h1 style={S.h1}>
-        대시보드{" "}
+        {title}{" "}
         <span
           style={{
             fontSize: 12,
@@ -542,12 +570,12 @@ export default function DashboardPage() {
             verticalAlign: "middle",
           }}
         >
-          v2 · DB집계 (결제건수 {lineCount.toLocaleString("ko-KR")})
+          결제건수 {lineCount.toLocaleString("ko-KR")}건
         </span>
       </h1>
 
-      {/* 오늘 기준 스냅샷 (필터 무관) */}
-      {summary && (
+      {/* 오늘 기준 스냅샷 */}
+      {show.financial && summary && (
         <div style={S.snap}>
           {summary.map((s) => (
             <div key={s.label} style={S.snapCard}>
@@ -616,627 +644,660 @@ export default function DashboardPage() {
 
       {err && <div style={S.err}>오류: {err}</div>}
 
-      {/* KPI 9종 */}
-      <div style={S.kpis}>
-        <Kpi
-          label="결제고객수"
-          value={customerCount.toLocaleString("ko-KR") + "명"}
-        />
-        <Kpi
-          label="결제건수"
-          value={lineCount.toLocaleString("ko-KR") + "건"}
-        />
-        <Kpi
-          label="결제상품수량"
-          value={kpi.qty.toLocaleString("ko-KR") + "개"}
-        />
-        <Kpi label="총매출" value={<Amt n={kpi.sales} />} big />
-        <Kpi label="정산금액" value={<Amt n={kpi.settlement} />} />
-        <Kpi label="제품원가" value={<Amt n={kpi.cost} />} />
-        <Kpi label="배송비" value={<Amt n={kpi.courier} />} />
-        <Kpi
-          label="순이익"
-          value={<Amt n={kpi.net} />}
-          big
-          accent={kpi.net >= 0 ? "#007a33" : "#da291c"}
-        />
-        <Kpi
-          label="이익률"
-          value={margin.toFixed(1) + "%"}
-          accent={margin >= 0 ? "#007a33" : "#da291c"}
-        />
-      </div>
-
-      {/* 플랫폼별 실적 표 */}
-      <div style={S.card}>
-        <div style={S.ctitle}>플랫폼별 실적</div>
-        <table style={S.table}>
-          <thead>
-            <tr>
-              <th style={S.th}>플랫폼</th>
-              {["매출", "정산금액", "배송비", "원가", "순이익"].map((h) => (
-                <th key={h} style={S.thr}>
-                  {h}
-                </th>
-              ))}
-              <th style={S.thc}>주문수</th>
-            </tr>
-          </thead>
-          <tbody>
-            {platformRows.map((r) => (
-              <tr key={r.group}>
-                <td style={S.td}>{r.group}</td>
-                <td style={S.tdr}>
-                  <Amt n={r.매출} />
-                </td>
-                <td style={S.tdr}>
-                  <Amt n={r.정산금액} />
-                </td>
-                <td style={S.tdr}>
-                  <Amt n={r.배송비} />
-                </td>
-                <td style={S.tdr}>
-                  <Amt n={r.원가} />
-                </td>
-                <td
-                  style={{
-                    ...S.tdr,
-                    fontWeight: 700,
-                    color: r.순이익 >= 0 ? "#007a33" : "#da291c",
-                  }}
-                >
-                  <Amt n={r.순이익} />
-                </td>
-                <td style={S.tdc}>{r.주문수}</td>
-              </tr>
-            ))}
-            {platformRows.length === 0 && (
-              <tr>
-                <td style={S.tdc} colSpan={7}>
-                  데이터 없음
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* 일별 추이 — 매출 + 주문수, 플랫폼 선택 */}
-      <div style={S.card}>
-        <div style={S.crow}>
-          <div style={S.ctitle}>일별 매출 · 주문수 추이</div>
-          <select
-            value={chartPlat}
-            onChange={(e) => setChartPlat(e.target.value)}
-            style={S.inputSm}
-          >
-            <option value="all">전체</option>
-            {GROUP_ORDER.map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
-        </div>
-        <ResponsiveContainer width="100%" height={280}>
-          <LineChart
-            data={byDate}
-            margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis dataKey="date" fontSize={11} />
-            <YAxis
-              yAxisId="l"
-              fontSize={11}
-              width={54}
-              tickFormatter={man}
-              domain={[0, Math.ceil(maxSales * 1.1)]}
+      {show.financial && (
+        <>
+          {/* KPI 9종 */}
+          <div style={S.kpis}>
+            <Kpi
+              label="결제고객수"
+              value={customerCount.toLocaleString("ko-KR") + "명"}
             />
-            <YAxis
-              yAxisId="r"
-              orientation="right"
-              fontSize={11}
-              width={40}
-              allowDecimals={false}
-              domain={[0, Math.ceil(maxOrders * 3)]}
+            <Kpi
+              label="결제건수"
+              value={lineCount.toLocaleString("ko-KR") + "건"}
             />
-            <Tooltip
-              formatter={(v, name) => (name === "주문수" ? v + "건" : won(v))}
+            <Kpi
+              label="결제상품수량"
+              value={kpi.qty.toLocaleString("ko-KR") + "개"}
             />
-            <Legend />
-            <Line
-              yAxisId="l"
-              type="monotone"
-              dataKey="매출"
-              stroke="#0098d8"
-              strokeWidth={2}
-              dot={false}
+            <Kpi label="총매출" value={<Amt n={kpi.sales} />} big />
+            <Kpi label="정산금액" value={<Amt n={kpi.settlement} />} />
+            <Kpi label="제품원가" value={<Amt n={kpi.cost} />} />
+            <Kpi label="배송비" value={<Amt n={kpi.courier} />} />
+            <Kpi
+              label="순이익"
+              value={<Amt n={kpi.net} />}
+              big
+              accent={kpi.net >= 0 ? "#007a33" : "#da291c"}
             />
-            <Line
-              yAxisId="r"
-              type="monotone"
-              dataKey="주문수"
-              stroke="#ef7b10"
-              strokeWidth={2}
-              dot={false}
+            <Kpi
+              label="이익률"
+              value={margin.toFixed(1) + "%"}
+              accent={margin >= 0 ? "#007a33" : "#da291c"}
             />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* 일별 플랫폼 매출 (그룹 바 — 날짜별로 플랫폼 나란히) */}
-      <div style={S.card}>
-        <div style={S.ctitle}>일별 플랫폼 매출</div>
-        <ResponsiveContainer width="100%" height={280}>
-          <BarChart
-            data={stackData}
-            margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
-            barGap={1}
-            barCategoryGap="18%"
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis dataKey="date" fontSize={11} />
-            <YAxis fontSize={11} width={54} tickFormatter={man} />
-            <Tooltip formatter={(v) => won(v)} />
-            <Legend />
-            {GROUP_ORDER.map((g) => (
-              <Bar key={g} dataKey={g} fill={GCOLOR[g]} radius={[2, 2, 0, 0]} />
-            ))}
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* 월별 비교 (플랫폼 무관, 일자별 매출) */}
-      <div style={S.card}>
-        <div style={S.crow}>
-          <div style={S.ctitle}>월별 매출 비교 (일자별)</div>
-          <div
-            style={{
-              display: "flex",
-              gap: 8,
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
-          >
-            <span style={S.flabel}>기준월</span>
-            <input
-              type="month"
-              value={baseMonth}
-              onChange={(e) => setBaseMonth(e.target.value)}
-              style={S.inputSm}
-            />
-            <span style={S.flabel}>비교월</span>
-            <input
-              type="month"
-              value={compMonth}
-              onChange={(e) => setCompMonth(e.target.value)}
-              style={S.inputSm}
-            />
-            <button onClick={loadMonthly} disabled={mLoading} style={S.btn}>
-              {mLoading ? "조회 중…" : "비교"}
-            </button>
           </div>
-        </div>
-        <ResponsiveContainer width="100%" height={280}>
-          <LineChart
-            data={monthData}
-            margin={{ top: 8, right: 16, left: 4, bottom: 4 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis
-              dataKey="day"
-              fontSize={11}
-              tickFormatter={(d) => d + "일"}
-            />
-            <YAxis fontSize={11} width={54} tickFormatter={man} />
-            <Tooltip
-              formatter={(v) => won(v)}
-              labelFormatter={(d) => d + "일"}
-            />
-            <Legend />
-            <Line
-              type="monotone"
-              dataKey="base"
-              name={`기준월 ${baseMonth}`}
-              stroke="#00afad"
-              strokeWidth={2}
-              dot={false}
-            />
-            <Line
-              type="monotone"
-              dataKey="comp"
-              name={`비교월 ${compMonth}`}
-              stroke="#da291c"
-              strokeWidth={2}
-              dot={false}
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
 
-      {/* 월별 누적 매출 비교 (위 차트와 같은 월 선택에 연동) */}
-      <div style={S.card}>
-        <div style={S.ctitle}>월별 누적 매출 비교 (일자별 누적)</div>
-        <div style={{ fontSize: 12, color: "#697386", margin: "4px 0 10px" }}>
-          위 차트와 같은 기준월·비교월. 날이 갈수록 매출이 얼마나 쌓이는지(러닝
-          합계)를 보여줘요.
-        </div>
-        <ResponsiveContainer width="100%" height={280}>
-          <LineChart
-            data={cumMonth}
-            margin={{ top: 8, right: 16, left: 4, bottom: 4 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis
-              dataKey="day"
-              fontSize={11}
-              tickFormatter={(d) => d + "일"}
-            />
-            <YAxis fontSize={11} width={54} tickFormatter={man} />
-            <Tooltip
-              formatter={(v) => won(v)}
-              labelFormatter={(d) => d + "일까지 누적"}
-            />
-            <Legend />
-            <Line
-              type="monotone"
-              dataKey="base"
-              name={`기준월 ${baseMonth}`}
-              stroke="#00afad"
-              strokeWidth={2}
-              dot={false}
-            />
-            <Line
-              type="monotone"
-              dataKey="comp"
-              name={`비교월 ${compMonth}`}
-              stroke="#da291c"
-              strokeWidth={2}
-              dot={false}
-            />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* 상품별 순위 (매출/수량 전환, 상품명 전체 표시) */}
-      <div style={S.card}>
-        <div style={S.crow}>
-          <div style={S.ctitle}>상품별 판매 상위 10</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {["매출", "수량"].map((mt) => (
-              <button
-                key={mt}
-                onClick={() => setProdMetric(mt)}
-                style={prodMetric === mt ? S.tabOn : S.tab}
-              >
-                {mt}
-              </button>
-            ))}
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={360}>
-          <BarChart
-            data={topProducts}
-            layout="vertical"
-            margin={{ left: 8, right: 24 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis
-              type="number"
-              fontSize={11}
-              tickFormatter={prodMetric === "매출" ? man : (v) => v}
-            />
-            <YAxis
-              type="category"
-              dataKey="name"
-              fontSize={11}
-              width={210}
-              interval={0}
-            />
-            <Tooltip
-              formatter={(v) =>
-                prodMetric === "매출"
-                  ? won(v)
-                  : v.toLocaleString("ko-KR") + "개"
-              }
-            />
-            <Bar dataKey={prodMetric} fill="#0019a8" radius={[0, 4, 4, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* 개입수별 판매 수량 (가로 막대) */}
-      <div style={S.card}>
-        <div style={S.ctitle}>개입수별 판매 수량 (세트 구성 포함)</div>
-        <div style={{ fontSize: 12, color: "#697386", margin: "4px 0 10px" }}>
-          1건 구매당 실제 낱개수로 집계. 세트도 실제 개입수로 잡혀요 (스타터팩
-          9개입 · 6팩 6개입 · 10+1 10개입 · 3종믹스 20개입).
-        </div>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart
-            data={byPack}
-            layout="vertical"
-            margin={{ left: 8, right: 24 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis type="number" fontSize={11} allowDecimals={false} />
-            <YAxis
-              type="category"
-              dataKey="pack"
-              fontSize={11}
-              width={70}
-              interval={0}
-            />
-            <Tooltip formatter={(v) => v.toLocaleString("ko-KR") + "개"} />
-            <Bar
-              dataKey="수량"
-              fill="#b26332"
-              radius={[0, 4, 4, 0]}
-              maxBarSize={22}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* 구성유형별 판매 (단품 / 동일맛 멀티팩 / 혼합세트) */}
-      <div style={S.card}>
-        <div style={S.crow}>
-          <div style={S.ctitle}>구성유형별 판매</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {["건수", "수량", "매출"].map((mt) => (
-              <button
-                key={mt}
-                onClick={() => setCfgMetric(mt)}
-                style={cfgMetric === mt ? S.tabOn : S.tab}
-              >
-                {mt}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div style={S.legend}>
-          <div style={S.legRow}>
-            <span style={{ ...S.dot, background: CFG_COLOR["혼합세트"] }} />
-            <b>혼합세트</b> — 스타터팩, 6팩, 10+1 등 서로 다른 맛 묶음
-          </div>
-          <div style={S.legRow}>
-            <span
-              style={{ ...S.dot, background: CFG_COLOR["동일맛 멀티팩"] }}
-            />
-            <b>동일맛 멀티팩</b> — 같은 맛 여러 개 (예: 아몬드 10개입)
-          </div>
-          <div style={S.legRow}>
-            <span style={{ ...S.dot, background: CFG_COLOR["단품"] }} />
-            <b>단품</b> — 낱개 1개 구입
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={220}>
-          <BarChart
-            data={configRows}
-            margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis dataKey="type" fontSize={12} />
-            <YAxis
-              fontSize={11}
-              width={54}
-              tickFormatter={cfgMetric === "매출" ? man : (v) => v}
-            />
-            <Tooltip
-              formatter={(v) =>
-                cfgMetric === "매출"
-                  ? won(v)
-                  : v.toLocaleString("ko-KR") +
-                    (cfgMetric === "건수" ? "건" : "개")
-              }
-            />
-            <Bar dataKey={cfgMetric} radius={[4, 4, 0, 0]} maxBarSize={90}>
-              {configRows.map((e, i) => (
-                <Cell key={i} fill={CFG_COLOR[e.type] || "#0019a8"} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* 혼합세트 인기 순위 */}
-      <div style={S.card}>
-        <div style={S.ctitle}>혼합세트 인기 순위 ({cfgMetric} 기준)</div>
-        <ResponsiveContainer width="100%" height={320}>
-          <BarChart
-            data={setTop}
-            layout="vertical"
-            margin={{ left: 8, right: 24 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis
-              type="number"
-              fontSize={11}
-              tickFormatter={cfgMetric === "매출" ? man : (v) => v}
-            />
-            <YAxis
-              type="category"
-              dataKey="name"
-              fontSize={11}
-              width={200}
-              interval={0}
-            />
-            <Tooltip
-              formatter={(v) =>
-                cfgMetric === "매출"
-                  ? won(v)
-                  : v.toLocaleString("ko-KR") +
-                    (cfgMetric === "건수" ? "건" : "개")
-              }
-            />
-            <Bar
-              dataKey={cfgMetric}
-              fill="#9a0058"
-              radius={[0, 4, 4, 0]}
-              maxBarSize={22}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* 낱개 구성품 실수요 (세트/옵션 펼침) */}
-      <div style={S.card}>
-        <div style={S.ctitle}>낱개 구성품 실수요 (세트·옵션 펼침)</div>
-        <div style={{ fontSize: 12, color: "#697386", marginBottom: 10 }}>
-          세트·멀티팩을 전부 낱개로 환산한 실물 수요. 생산·재고 판단용. (예:
-          스타터팩 1개 → 아몬드1·오트1…군고구마1)
-        </div>
-        <ResponsiveContainer width="100%" height={360}>
-          <BarChart
-            data={demandTop}
-            layout="vertical"
-            margin={{ left: 8, right: 24 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-            <XAxis type="number" fontSize={11} allowDecimals={false} />
-            <YAxis
-              type="category"
-              dataKey="name"
-              fontSize={11}
-              width={140}
-              interval={0}
-            />
-            <Tooltip formatter={(v) => v.toLocaleString("ko-KR") + "개"} />
-            <Bar
-              dataKey="낱개수량"
-              fill="#007a33"
-              radius={[0, 4, 4, 0]}
-              maxBarSize={22}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* 비용 구조 + 요일별 매출 */}
-      <div style={S.row2}>
-        <div style={{ ...S.card, flex: 1, marginBottom: 0 }}>
-          <div style={S.ctitle}>비용 구조 (총매출 기준)</div>
-          <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie
-                data={costParts}
-                dataKey="value"
-                nameKey="name"
-                innerRadius={58}
-                outerRadius={95}
-                paddingAngle={2}
-              >
-                {costParts.map((e, i) => (
-                  <Cell key={i} fill={e.color} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(v) => won(v)} />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-        <div style={{ ...S.card, flex: 1.1, marginBottom: 0 }}>
-          <div style={S.ctitle}>요일별 매출</div>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart
-              data={byWeekday}
-              margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
-              <XAxis dataKey="label" fontSize={12} />
-              <YAxis fontSize={11} width={54} tickFormatter={man} />
-              <Tooltip formatter={(v) => won(v)} />
-              <Bar
-                dataKey="매출"
-                fill="#9364cc"
-                radius={[4, 4, 0, 0]}
-                maxBarSize={46}
-              />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      {/* 상세 내역 */}
-      <div style={S.card}>
-        <div style={S.ctitle}>
-          주문 상세 내역 ({rows.length.toLocaleString("ko-KR")}건)
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={S.table}>
-            <thead>
-              <tr>
-                <th style={S.thc}>넘버</th>
-                <th style={S.th}>플랫폼</th>
-                <th style={S.th}>주문번호</th>
-                <th style={S.th}>송장번호</th>
-                <th style={S.th}>제품</th>
-                <th style={S.thr}>주문금액</th>
-                <th style={S.thr}>정산예정금액</th>
-                <th style={S.thc}>수량</th>
-                <th style={S.thr}>공가</th>
-                <th style={S.thr}>배송비</th>
-                <th style={S.thr}>이익</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => {
-                const t = r.tracking_no || "_n" + i;
-                const ship = firstIdxByTrack[t] === i ? parcelByTrack[t] : 0; // 첫 라인만 부과
-                const profit =
-                  Number(r.settlement_amount || 0) -
-                  ship -
-                  Number(r.product_cost || 0);
-                return (
-                  <tr
-                    key={r.platform + r.order_id + i}
-                    style={i % 2 ? S.trAlt : undefined}
-                  >
-                    <td style={S.tdc}>{i + 1}</td>
-                    <td style={S.td}>{groupOf(r.platform)}</td>
-                    <td style={S.tdm}>{r.order_id}</td>
-                    <td style={S.tdm}>{r.tracking_no || "-"}</td>
-                    <td style={S.td} title={r.listing_name}>
-                      {r.product_display || (r.listing_name || "").slice(0, 24)}
+          {/* 플랫폼별 실적 표 */}
+          <div style={S.card}>
+            <div style={S.ctitle}>플랫폼별 실적</div>
+            <table style={S.table}>
+              <thead>
+                <tr>
+                  <th style={S.th}>플랫폼</th>
+                  {["매출", "정산금액", "배송비", "원가", "순이익"].map((h) => (
+                    <th key={h} style={S.thr}>
+                      {h}
+                    </th>
+                  ))}
+                  <th style={S.thc}>주문수</th>
+                </tr>
+              </thead>
+              <tbody>
+                {platformRows.map((r) => (
+                  <tr key={r.group}>
+                    <td style={S.td}>{r.group}</td>
+                    <td style={S.tdr}>
+                      <Amt n={r.매출} />
                     </td>
-                    <td style={S.tdr}>{won(r.gross_sales)}</td>
-                    <td style={S.tdr}>{won(r.settlement_amount)}</td>
-                    <td style={S.tdc}>{r.quantity}</td>
-                    <td style={S.tdr}>{won(r.product_cost)}</td>
-                    <td style={S.tdr}>{ship > 0 ? won(ship) : ""}</td>
+                    <td style={S.tdr}>
+                      <Amt n={r.정산금액} />
+                    </td>
+                    <td style={S.tdr}>
+                      <Amt n={r.배송비} />
+                    </td>
+                    <td style={S.tdr}>
+                      <Amt n={r.원가} />
+                    </td>
                     <td
                       style={{
                         ...S.tdr,
                         fontWeight: 700,
-                        color: profit >= 0 ? "#007a33" : "#da291c",
+                        color: r.순이익 >= 0 ? "#007a33" : "#da291c",
                       }}
                     >
-                      {won(profit)}
+                      <Amt n={r.순이익} />
+                    </td>
+                    <td style={S.tdc}>{r.주문수}</td>
+                  </tr>
+                ))}
+                {platformRows.length === 0 && (
+                  <tr>
+                    <td style={S.tdc} colSpan={7}>
+                      데이터 없음
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-            <tfoot>
-              <tr style={S.tfoot}>
-                <td style={S.tdc} colSpan={5}>
-                  합계
-                </td>
-                <td style={S.tdr}>{won(kpi.sales)}</td>
-                <td style={S.tdr}>{won(kpi.settlement)}</td>
-                <td style={S.tdc}></td>
-                <td style={S.tdr}>{won(kpi.cost)}</td>
-                <td style={S.tdr}>{won(kpi.courier)}</td>
-                <td style={{ ...S.tdr, fontWeight: 700 }}>{won(kpi.net)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
+                )}
+              </tbody>
+            </table>
+          </div>
 
-      {!loading && rows.length === 0 && !err && (
-        <div style={S.empty}>이 기간에 데이터가 없어요. 기간을 넓혀보세요.</div>
+          {/* 일별 추이 — 매출 + 주문수, 플랫폼 선택 */}
+          <div style={S.card}>
+            <div style={S.crow}>
+              <div style={S.ctitle}>일별 매출 · 주문수 추이</div>
+              <select
+                value={chartPlat}
+                onChange={(e) => setChartPlat(e.target.value)}
+                style={S.inputSm}
+              >
+                <option value="all">전체</option>
+                {GROUP_ORDER.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart
+                data={byDate}
+                margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis dataKey="date" fontSize={11} />
+                <YAxis
+                  yAxisId="l"
+                  fontSize={11}
+                  width={54}
+                  tickFormatter={man}
+                  domain={[0, Math.ceil(maxSales * 1.1)]}
+                />
+                <YAxis
+                  yAxisId="r"
+                  orientation="right"
+                  fontSize={11}
+                  width={40}
+                  allowDecimals={false}
+                  domain={[0, Math.ceil(maxOrders * 3)]}
+                />
+                <Tooltip
+                  formatter={(v, name) =>
+                    name === "주문수" ? v + "건" : won(v)
+                  }
+                />
+                <Legend />
+                <Line
+                  yAxisId="l"
+                  type="monotone"
+                  dataKey="매출"
+                  stroke="#0098d8"
+                  strokeWidth={2}
+                  dot={false}
+                />
+                <Line
+                  yAxisId="r"
+                  type="monotone"
+                  dataKey="주문수"
+                  stroke="#ef7b10"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 일별 플랫폼 매출 (그룹 바 — 날짜별로 플랫폼 나란히) */}
+          <div style={S.card}>
+            <div style={S.ctitle}>일별 플랫폼 매출</div>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart
+                data={stackData}
+                margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
+                barGap={1}
+                barCategoryGap="18%"
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis dataKey="date" fontSize={11} />
+                <YAxis fontSize={11} width={54} tickFormatter={man} />
+                <Tooltip formatter={(v) => won(v)} />
+                <Legend />
+                {GROUP_ORDER.map((g) => (
+                  <Bar
+                    key={g}
+                    dataKey={g}
+                    fill={GCOLOR[g]}
+                    radius={[2, 2, 0, 0]}
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 월별 비교 (플랫폼 무관, 일자별 매출) */}
+          <div style={S.card}>
+            <div style={S.crow}>
+              <div style={S.ctitle}>월별 매출 비교 (일자별)</div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span style={S.flabel}>기준월</span>
+                <input
+                  type="month"
+                  value={baseMonth}
+                  onChange={(e) => setBaseMonth(e.target.value)}
+                  style={S.inputSm}
+                />
+                <span style={S.flabel}>비교월</span>
+                <input
+                  type="month"
+                  value={compMonth}
+                  onChange={(e) => setCompMonth(e.target.value)}
+                  style={S.inputSm}
+                />
+                <button onClick={loadMonthly} disabled={mLoading} style={S.btn}>
+                  {mLoading ? "조회 중…" : "비교"}
+                </button>
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart
+                data={monthData}
+                margin={{ top: 8, right: 16, left: 4, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis
+                  dataKey="day"
+                  fontSize={11}
+                  tickFormatter={(d) => d + "일"}
+                />
+                <YAxis fontSize={11} width={54} tickFormatter={man} />
+                <Tooltip
+                  formatter={(v) => won(v)}
+                  labelFormatter={(d) => d + "일"}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="base"
+                  name={`기준월 ${baseMonth}`}
+                  stroke="#00afad"
+                  strokeWidth={2}
+                  dot={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="comp"
+                  name={`비교월 ${compMonth}`}
+                  stroke="#da291c"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 월별 누적 매출 비교 (위 차트와 같은 월 선택에 연동) */}
+          <div style={S.card}>
+            <div style={S.ctitle}>월별 누적 매출 비교 (일자별 누적)</div>
+            <div
+              style={{ fontSize: 12, color: "#697386", margin: "4px 0 10px" }}
+            >
+              위 차트와 같은 기준월·비교월. 날이 갈수록 매출이 얼마나
+              쌓이는지(러닝 합계)를 보여줘요.
+            </div>
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart
+                data={cumMonth}
+                margin={{ top: 8, right: 16, left: 4, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis
+                  dataKey="day"
+                  fontSize={11}
+                  tickFormatter={(d) => d + "일"}
+                />
+                <YAxis fontSize={11} width={54} tickFormatter={man} />
+                <Tooltip
+                  formatter={(v) => won(v)}
+                  labelFormatter={(d) => d + "일까지 누적"}
+                />
+                <Legend />
+                <Line
+                  type="monotone"
+                  dataKey="base"
+                  name={`기준월 ${baseMonth}`}
+                  stroke="#00afad"
+                  strokeWidth={2}
+                  dot={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="comp"
+                  name={`비교월 ${compMonth}`}
+                  stroke="#da291c"
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </>
       )}
+
+      {show.products && (
+        <>
+          {/* 상품별 순위 (매출/수량 전환, 상품명 전체 표시) */}
+          <div style={S.card}>
+            <div style={S.crow}>
+              <div style={S.ctitle}>상품별 판매 상위 10</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {["매출", "수량"].map((mt) => (
+                  <button
+                    key={mt}
+                    onClick={() => setProdMetric(mt)}
+                    style={prodMetric === mt ? S.tabOn : S.tab}
+                  >
+                    {mt}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={360}>
+              <BarChart
+                data={topProducts}
+                layout="vertical"
+                margin={{ left: 8, right: 24 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis
+                  type="number"
+                  fontSize={11}
+                  tickFormatter={prodMetric === "매출" ? man : (v) => v}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  fontSize={11}
+                  width={210}
+                  interval={0}
+                />
+                <Tooltip
+                  formatter={(v) =>
+                    prodMetric === "매출"
+                      ? won(v)
+                      : v.toLocaleString("ko-KR") + "개"
+                  }
+                />
+                <Bar
+                  dataKey={prodMetric}
+                  fill="#0019a8"
+                  radius={[0, 4, 4, 0]}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 개입수별 판매 수량 (가로 막대) */}
+          <div style={S.card}>
+            <div style={S.ctitle}>개입수별 판매 수량 (세트 구성 포함)</div>
+            <div
+              style={{ fontSize: 12, color: "#697386", margin: "4px 0 10px" }}
+            >
+              1건 구매당 실제 낱개수로 집계. 세트도 실제 개입수로 잡혀요
+              (스타터팩 9개입 · 6팩 6개입 · 10+1 10개입 · 3종믹스 20개입).
+            </div>
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart
+                data={byPack}
+                layout="vertical"
+                margin={{ left: 8, right: 24 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis type="number" fontSize={11} allowDecimals={false} />
+                <YAxis
+                  type="category"
+                  dataKey="pack"
+                  fontSize={11}
+                  width={70}
+                  interval={0}
+                />
+                <Tooltip formatter={(v) => v.toLocaleString("ko-KR") + "개"} />
+                <Bar
+                  dataKey="수량"
+                  fill="#b26332"
+                  radius={[0, 4, 4, 0]}
+                  maxBarSize={22}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 구성유형별 판매 (단품 / 동일맛 멀티팩 / 혼합세트) */}
+          <div style={S.card}>
+            <div style={S.crow}>
+              <div style={S.ctitle}>구성유형별 판매</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {["건수", "수량", "매출"].map((mt) => (
+                  <button
+                    key={mt}
+                    onClick={() => setCfgMetric(mt)}
+                    style={cfgMetric === mt ? S.tabOn : S.tab}
+                  >
+                    {mt}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={S.legend}>
+              <div style={S.legRow}>
+                <span style={{ ...S.dot, background: CFG_COLOR["혼합세트"] }} />
+                <b>혼합세트</b> — 스타터팩, 6팩, 10+1 등 서로 다른 맛 묶음
+              </div>
+              <div style={S.legRow}>
+                <span
+                  style={{ ...S.dot, background: CFG_COLOR["동일맛 멀티팩"] }}
+                />
+                <b>동일맛 멀티팩</b> — 같은 맛 여러 개 (예: 아몬드 10개입)
+              </div>
+              <div style={S.legRow}>
+                <span style={{ ...S.dot, background: CFG_COLOR["단품"] }} />
+                <b>단품</b> — 낱개 1개 구입
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart
+                data={configRows}
+                margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis dataKey="type" fontSize={12} />
+                <YAxis
+                  fontSize={11}
+                  width={54}
+                  tickFormatter={cfgMetric === "매출" ? man : (v) => v}
+                />
+                <Tooltip
+                  formatter={(v) =>
+                    cfgMetric === "매출"
+                      ? won(v)
+                      : v.toLocaleString("ko-KR") +
+                        (cfgMetric === "건수" ? "건" : "개")
+                  }
+                />
+                <Bar dataKey={cfgMetric} radius={[4, 4, 0, 0]} maxBarSize={90}>
+                  {configRows.map((e, i) => (
+                    <Cell key={i} fill={CFG_COLOR[e.type] || "#0019a8"} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 혼합세트 인기 순위 */}
+          <div style={S.card}>
+            <div style={S.ctitle}>혼합세트 인기 순위 ({cfgMetric} 기준)</div>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart
+                data={setTop}
+                layout="vertical"
+                margin={{ left: 8, right: 24 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis
+                  type="number"
+                  fontSize={11}
+                  tickFormatter={cfgMetric === "매출" ? man : (v) => v}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  fontSize={11}
+                  width={200}
+                  interval={0}
+                />
+                <Tooltip
+                  formatter={(v) =>
+                    cfgMetric === "매출"
+                      ? won(v)
+                      : v.toLocaleString("ko-KR") +
+                        (cfgMetric === "건수" ? "건" : "개")
+                  }
+                />
+                <Bar
+                  dataKey={cfgMetric}
+                  fill="#9a0058"
+                  radius={[0, 4, 4, 0]}
+                  maxBarSize={22}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* 낱개 구성품 실수요 (세트/옵션 펼침) */}
+          <div style={S.card}>
+            <div style={S.ctitle}>낱개 구성품 실수요 (세트·옵션 펼침)</div>
+            <div style={{ fontSize: 12, color: "#697386", marginBottom: 10 }}>
+              세트·멀티팩을 전부 낱개로 환산한 실물 수요. 생산·재고 판단용. (예:
+              스타터팩 1개 → 아몬드1·오트1…군고구마1)
+            </div>
+            <ResponsiveContainer width="100%" height={360}>
+              <BarChart
+                data={demandTop}
+                layout="vertical"
+                margin={{ left: 8, right: 24 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis type="number" fontSize={11} allowDecimals={false} />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  fontSize={11}
+                  width={140}
+                  interval={0}
+                />
+                <Tooltip formatter={(v) => v.toLocaleString("ko-KR") + "개"} />
+                <Bar
+                  dataKey="낱개수량"
+                  fill="#007a33"
+                  radius={[0, 4, 4, 0]}
+                  maxBarSize={22}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </>
+      )}
+
+      {show.costWeekday && (
+        /* 비용 구조 + 요일별 매출 */
+        <div style={S.row2}>
+          <div style={{ ...S.card, flex: 1, marginBottom: 0 }}>
+            <div style={S.ctitle}>비용 구조 (총매출 기준)</div>
+            <ResponsiveContainer width="100%" height={280}>
+              <PieChart>
+                <Pie
+                  data={costParts}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={58}
+                  outerRadius={95}
+                  paddingAngle={2}
+                >
+                  {costParts.map((e, i) => (
+                    <Cell key={i} fill={e.color} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v) => won(v)} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={{ ...S.card, flex: 1.1, marginBottom: 0 }}>
+            <div style={S.ctitle}>요일별 매출</div>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart
+                data={byWeekday}
+                margin={{ top: 8, right: 12, left: 4, bottom: 4 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#eef1f5" />
+                <XAxis dataKey="label" fontSize={12} />
+                <YAxis fontSize={11} width={54} tickFormatter={man} />
+                <Tooltip formatter={(v) => won(v)} />
+                <Bar
+                  dataKey="매출"
+                  fill="#9364cc"
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={46}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* 상세 내역 */}
+      {show.detail && (
+        <div style={S.card}>
+          <div style={S.ctitle}>
+            주문 상세 내역 ({rows.length.toLocaleString("ko-KR")}건)
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={S.table}>
+              <thead>
+                <tr>
+                  <th style={S.thc}>넘버</th>
+                  <th style={S.th}>플랫폼</th>
+                  <th style={S.th}>주문번호</th>
+                  <th style={S.th}>송장번호</th>
+                  <th style={S.th}>제품</th>
+                  <th style={S.thr}>주문금액</th>
+                  <th style={S.thr}>정산예정금액</th>
+                  <th style={S.thc}>수량</th>
+                  <th style={S.thr}>공가</th>
+                  <th style={S.thr}>배송비</th>
+                  <th style={S.thr}>이익</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => {
+                  const t = r.tracking_no || "_n" + i;
+                  const ship = firstIdxByTrack[t] === i ? parcelByTrack[t] : 0; // 첫 라인만 부과
+                  const profit =
+                    Number(r.settlement_amount || 0) -
+                    ship -
+                    Number(r.product_cost || 0);
+                  return (
+                    <tr
+                      key={r.platform + r.order_id + i}
+                      style={i % 2 ? S.trAlt : undefined}
+                    >
+                      <td style={S.tdc}>{i + 1}</td>
+                      <td style={S.td}>{groupOf(r.platform)}</td>
+                      <td style={S.tdm}>{r.order_id}</td>
+                      <td style={S.tdm}>{r.tracking_no || "-"}</td>
+                      <td style={S.td} title={r.listing_name}>
+                        {r.product_display ||
+                          (r.listing_name || "").slice(0, 24)}
+                      </td>
+                      <td style={S.tdr}>{won(r.gross_sales)}</td>
+                      <td style={S.tdr}>{won(r.settlement_amount)}</td>
+                      <td style={S.tdc}>{r.quantity}</td>
+                      <td style={S.tdr}>{won(r.product_cost)}</td>
+                      <td style={S.tdr}>{ship > 0 ? won(ship) : ""}</td>
+                      <td
+                        style={{
+                          ...S.tdr,
+                          fontWeight: 700,
+                          color: profit >= 0 ? "#007a33" : "#da291c",
+                        }}
+                      >
+                        {won(profit)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={S.tfoot}>
+                  <td style={S.tdc} colSpan={5}>
+                    합계
+                  </td>
+                  <td style={S.tdr}>{won(kpi.sales)}</td>
+                  <td style={S.tdr}>{won(kpi.settlement)}</td>
+                  <td style={S.tdc}></td>
+                  <td style={S.tdr}>{won(kpi.cost)}</td>
+                  <td style={S.tdr}>{won(kpi.courier)}</td>
+                  <td style={{ ...S.tdr, fontWeight: 700 }}>{won(kpi.net)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!loading &&
+        !err &&
+        (show.financial || show.costWeekday || show.detail) &&
+        rows.length === 0 && (
+          <div style={S.empty}>
+            이 기간에 데이터가 없어요. 기간을 넓혀보세요.
+          </div>
+        )}
     </div>
   );
 }
